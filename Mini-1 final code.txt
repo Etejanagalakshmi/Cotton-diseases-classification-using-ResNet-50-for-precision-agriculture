@@ -1,0 +1,260 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+import tensorflow_hub as hub
+from IPython.display import Image
+from keras.preprocessing import image
+from sklearn.model_selection import train_test_split
+import os
+import zipfile
+import random
+import datetime
+import shutil
+from google.colab import files
+from sklearn.metrics import confusion_matrix
+from keras.models import load_model
+from keras.preprocessing import image
+
+# list of image path and label for dataframe
+IMAGE_PATH = []
+LABEL = []
+Test_label=[]
+test_path=[]
+# RICE
+cotton_train_list = ['/content/drive/MyDrive/Colab Notebooks/cotton/cotton/bacterial_blight', '/content/drive/MyDrive/Colab Notebooks/cotton/cotton/curl_virus','/content/drive/MyDrive/Colab Notebooks/cotton/cotton/fussarium_wilt']
+for index in range(len(cotton_train_list)):
+  for image in os.listdir(cotton_train_list[index]):
+    IMAGE_PATH.append(os.path.join(cotton_train_list[index], image))
+for i in range(448):
+  LABEL.append("Bacterial Blight -Bacterial family ")
+for i in range(418):
+  LABEL.append("Leaf curl - Virus Family")
+for i in range(419):
+  LABEL.append("Fusarium Wilt-Fungal Family")
+test_list=['/content/drive/MyDrive/Colab Notebooks/cotton/cotton/test']
+for index in range(len(test_list)):
+  for image in os.listdir(test_list[index]):
+    test_path.append(os.path.join(test_list[index], image))
+for i in range(3):
+  Test_label.append("Bacterial Blight - Bacterial family")
+for i in range(3):
+  Test_label.append("Leaf curl - Virus Family")
+for i in range(3):
+  Test_label.append("Fusarium Wilt-Fungal Family")
+print(Test_label)
+database1=pd.DataFrame(test_path, columns=['test_path'])
+database1['test_label']=Test_label
+print(database1)
+database = pd.DataFrame(IMAGE_PATH, columns=['path'])
+
+database['label'] = LABEL
+
+database.head()
+print(database)
+X_train, X_val, y_train, y_val = train_test_split(database['path'], database['label'], test_size=0.1)
+unique_label = np.array(database['label'].unique())
+print(unique_label)
+print(list(y_val))
+print(X_val)
+
+# num unique labels
+num_unique_label = len(unique_label)
+num_unique_label
+# Encoding labels
+# Turns into boolean array for all index
+# train
+boolean_array_train = [i == unique_label for i in y_train]
+# validation
+boolean_array_val = [i == unique_label for i in y_val]
+# check boolean array for data in index 0
+boolean_array_train[0]
+
+# Turn into tensor set
+# train
+train_set = tf.data.Dataset.from_tensor_slices(( tf.constant(X_train), tf.constant(boolean_array_train) ))
+# validation
+val_set = tf.data.Dataset.from_tensor_slices(( tf.constant(X_val), tf.constant(boolean_array_val) ))
+
+
+BUFFER_SIZE = len(train_set)
+train_set = train_set.shuffle(BUFFER_SIZE)
+
+# our desired image size
+IMAGE_SIZE = 224
+# read, turn image into number, normalize, resize
+def preprocess_image(image_path, labels=None):
+  image = tf.io.read_file(image_path)
+  image = tf.image.decode_jpeg(image, channels=3)
+  image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+  image = tf.image.resize(image, size=[IMAGE_SIZE, IMAGE_SIZE])
+  return image, labels
+# apply
+train_set = train_set.map(preprocess_image)
+val_set = val_set.map(preprocess_image)
+
+
+# batch size
+BATCH_SIZE = 128
+# batching train & validation set
+train_set = train_set.batch(BATCH_SIZE)
+val_set = val_set.batch(BATCH_SIZE)
+# check element spec
+train_set.element_spec
+
+def show_images_in_a_batch(images, labels):
+  plt.figure(figsize=(15, 15))
+# for each image in one batch (32 images)
+  for i in range(128):
+# Create subplots (8 rows, 5 columns)
+    ax = plt.subplot(16, 8, i+1) # i = index
+# Show the image
+    plt.imshow(images[i])
+# Add the image label as the title
+    plt.title(unique_label[np.argmax(labels[i])])
+# Turn the grid lines off
+    plt.axis("off")
+# take one random batch from training set
+sample_train_images, sample_train_labels = next(iter(train_set))
+# show
+show_images_in_a_batch(sample_train_images, sample_train_labels)
+
+# 1. Create Model
+model = tf.keras.Sequential([
+# transfer learning model
+hub.KerasLayer("https://tfhub.dev/tensorflow/resnet_50/feature_vector/1"),
+# output layer
+tf.keras.layers.Dense(units=num_unique_label, activation='softmax')    ])
+# 2. Compile Model
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+# build the model and pass the input shape
+model.build(input_shape = [None, 224, 224, 3])
+# 3. Create Callback
+# EARLYSTOPPING CALLBACK, monitor the val loss (prevent overfitting)
+early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3)
+# 4. Training Model
+history_train = model.fit(train_set, epochs=2, validation_data = val_set, callbacks=[early_stopping])
+
+model.save("ME_model.h5")
+model_path="ME_model.h5"
+
+# train
+from sklearn.metrics import classification_report
+acc = history_train.history['accuracy']
+loss = history_train.history['loss']
+# validation
+val_acc = history_train.history['val_accuracy']
+val_loss = history_train.history['val_loss']
+# range number of epochs
+epochs = range(len(acc))
+# plot training and validation accuracy per epoch
+plt.figure()
+plt.plot(epochs, acc)
+plt.plot(epochs, val_acc)
+plt.title('Training and validation accuracy')
+plt.figure()
+# plot training and validation loss per epoch
+plt.plot(epochs, loss)
+plt.plot(epochs, val_loss)
+plt.title('Training and validation loss')
+plt.legend(['train', 'val'])
+# upload files
+uploaded=files.upload()
+filename = []
+test_images = []
+for fn in uploaded.keys():
+    filename.append(fn)
+
+    path='/content/' + fn
+    test_images.append(path)
+print(test_images)
+
+# turn into set
+test_set = tf.data.Dataset.from_tensor_slices(( tf.constant(list(X_val)) ))
+# preprocess
+test_set = test_set.map(preprocess_image)
+# batching
+test_set = test_set.batch(batch_size=32)
+
+
+# predict
+test_predictions = model.predict(test_set)
+print(test_predictions)
+label_prediction = []
+for i in range(len(test_predictions)):
+    label_prediction.append(unique_label[np.argmax(test_predictions[i])])
+print(label_prediction)
+print(list(y_val))
+unique_labels = np.unique(Test_label)
+num_classes = len(unique_labels)
+# show prediction results
+for i in range(len(test_images)):
+    print(label_prediction[i])
+    pil_img = Image(filename=test_images[i], width=150, height=150)
+    display(pil_img)
+cm = confusion_matrix(list(y_val),label_prediction)
+cr=classification_report(list(y_val),label_prediction)
+print(cr)
+
+print(cm)
+plt.figure()
+plt.imshow(cm, cmap=plt.cm.Blues)
+plt.imshow(cr, cmap=plt.cr.Blues)
+plt.title('Confusion Matrix for Cotton Disease Classification')
+plt.colorbar()
+tick_marks = np.arange(len(unique_label))
+plt.xticks(tick_marks, unique_label, rotation=45)
+plt.yticks(tick_marks, unique_label)
+plt.xlabel('Predicted Label')
+plt.ylabel('True Label')
+
+import tensorflow as tf
+import tensorflow_addons as tfa
+import tensorflow_hub as hub
+import gradio as gr
+from PIL import Image
+import numpy as np
+import cv2
+import warnings
+
+warnings.filterwarnings('ignore')
+import base64
+
+# Define custom metric function
+f1_score = tfa.metrics.F1Score(num_classes=3)
+
+
+# Load saved model
+model = tf.keras.models.load_model('/content/ME_model.h5',custom_objects={'KerasLayer':hub.KerasLayer})
+
+# Define class names for predictions
+class_names = {
+    0:'Bacterial Blight',
+    1:'Leaf Curl',
+    2:'Fusarium Wilt',
+
+}
+
+def classify_image(inp):
+    IMAGE_SIZE = 224
+
+    image = tf.io.encode_jpeg(inp)
+
+    image = tf.image.decode_jpeg(image, channels=3)
+    image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+    #image = tf.image.resize(image, size=[IMAGE_SIZE, IMAGE_SIZE])
+    image = tf.image.resize(image, (224, 224))  # Resize image to (224, 224)
+    image = tf.expand_dims(image, axis=0)
+    pred_probs = model.predict(image)
+    pred_class = np.argmax(pred_probs)
+    label = class_names[pred_class]
+    return label
+
+# Define Gradio interface
+inputs = gr.inputs.Image(shape=(224, 224), source="upload")
+outputs = gr.outputs.Label(num_top_classes=3)
+interface = gr.Interface(fn=classify_image, inputs=inputs, outputs=outputs)
+# Run interface
+interface.launch(debug=True)
+
+
